@@ -177,9 +177,22 @@ Image bytes are not cached in RAM for the retention period.
 
 ## Validation and failure boundary
 
-The original OMP `imageGenSchema` validates tool arguments; the service does not
-duplicate OMP's model, prompt, or image-input validation. The only input contract
-change is `input.path`: it accepts retained references instead of host paths.
+The exposed `generate_image` parameters derive from OMP's original
+`imageGenSchema`, with two deliberate schema deviations: `input.path` describes
+retained generated image references instead of host paths, and `model` gains a
+host-specific enum when usable authenticated image models are available. The
+original model description and all other schema details are preserved.
+
+Discover model choices through the tool's MCP input schema. At startup the
+service takes OMP's usable authenticated image candidate pool, keeps only
+image-generation APIs, and publishes deduplicated `provider/id` values in pool
+order. This list is fixed for the running service: restart after adding or
+removing an OMP provider login. A model outside a published enum returns MCP
+`InvalidParams` before any provider request. Accepted values pass unchanged to
+the original OMP tool and resolver, including IDs containing slashes; OMP still
+owns model selection and fallback. If the pool is empty, `model` remains the
+original free string, and OMP supplies its normal model or credential error.
+The service does not duplicate OMP's prompt or image-input validation.
 
 OMP 18.8.9 has no dedicated validation-error class. The adapter preserves
 messages only for errors thrown directly by the pinned original `image-gen.ts`

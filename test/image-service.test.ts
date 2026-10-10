@@ -19,6 +19,14 @@ import {
 
 const ListedTools = Schema.Struct({ tools: Schema.Array(McpSchema.Tool) });
 
+const openaiImageModels = [
+  "openai/chatgpt-image-latest",
+  "openai/gpt-image-1",
+  "openai/gpt-image-1-mini",
+  "openai/gpt-image-1.5",
+  "openai/gpt-image-2",
+];
+
 const makeBackgroundHarness = (
   imageRole = "openai-codex/gpt-image-2",
   modelsConfig = "providers:\n  openai-codex:\n    baseUrl: https://chatgpt.com/backend-api\n",
@@ -121,13 +129,166 @@ describe("authenticated MCP endpoint", () => {
           '"generated image reference only; host paths are not accepted"',
         );
 
-        expect(listed.tools[0]?.inputSchema).toEqual(JSON.parse(expectedJson));
+        const expected = JSON.parse(expectedJson);
+        expected.properties.model.enum = openaiImageModels;
+
+        expect(listed.tools[0]?.inputSchema).toEqual(expected);
         expect(harness.networkCalls()).toBe(0);
 
         if (revision === "2026-07-28") {
           expect(response.headers.get("Mcp-Session-Id")).toBeNull();
         }
       }),
+    );
+    it.effect(
+      `${revision}: rejects out-of-enum selectors with the available models before provider requests`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness;
+          const client = yield* harness.connect(revision);
+
+          for (const model of [
+            "nonexistent/private-model",
+            "openai/gpt-5.4",
+            "xai/grok-imagine-image",
+            "gpt-image-2",
+            "@image",
+          ]) {
+            const { envelope } = yield* client.rpc("tools/call", {
+              name: "generate_image",
+              arguments: { subject: "fox", model },
+            });
+
+            if (revision === "2025-06-18") {
+              expect(envelope.error?.code).toBe(-32602);
+              expect(envelope.error?.message).toContain("model");
+
+              for (const available of openaiImageModels) {
+                expect(envelope.error?.message).toContain(available);
+              }
+            } else {
+              expect(envelope.error).toBeUndefined();
+
+              const result = yield* Schema.decodeUnknownEffect(
+                McpSchema.CallToolResult,
+              )(envelope.result);
+
+              expect(result.isError).toBe(true);
+
+              for (const message of ["model", ...openaiImageModels]) {
+                expect(result.content).toContainEqual({
+                  type: "text",
+                  text: expect.stringContaining(message),
+                });
+              }
+            }
+          }
+
+          expect(harness.providerRequests).toHaveLength(0);
+        }),
+    );
+    it.effect(
+      `${revision}: preserves the original free-string model schema when the image pool is empty`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarnessWithConfig({}, []);
+          const client = yield* harness.connect(revision);
+          const { envelope: discovery } = yield* client.rpc("tools/list");
+
+          const listed = yield* Schema.decodeUnknownEffect(ListedTools)(
+            discovery.result,
+          );
+
+          const original = imageGenSchema.toJsonSchema({
+            io: "input",
+            target: "draft-2020-12",
+            dialect: null,
+          });
+
+          const expectedJson = JSON.stringify(original).replace(
+            '"input image path"',
+            '"generated image reference only; host paths are not accepted"',
+          );
+
+          expect(discovery.error).toBeUndefined();
+          expect(listed.tools).toHaveLength(1);
+          expect(listed.tools[0]?.inputSchema).toEqual(
+            JSON.parse(expectedJson),
+          );
+
+          const { envelope } = yield* client.rpc("tools/call", {
+            name: "generate_image",
+            arguments: { subject: "fox", model: "nonexistent/private-model" },
+          });
+
+          const problem =
+            "Image model selector did not match an available image model: nonexistent/private-model";
+
+          if (revision === "2025-06-18") {
+            expect(envelope.error?.code).toBe(-32602);
+            expect(envelope.error?.message).toContain(problem);
+          } else {
+            expect(envelope.error).toBeUndefined();
+
+            const result = yield* Schema.decodeUnknownEffect(
+              McpSchema.CallToolResult,
+            )(envelope.result);
+
+            expect(result.isError).toBe(true);
+            expect(result.content).toEqual([
+              { type: "text", text: "Invalid tool input: " + problem },
+            ]);
+          }
+
+          expect(harness.providerRequests).toHaveLength(0);
+        }),
+    );
+    it.effect(
+      `${revision}: resolves every advertised OpenAI image model through the original tool`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness;
+          const client = yield* harness.connect(revision);
+
+          for (const [model, providerModel] of [
+            ["openai/chatgpt-image-latest", "chatgpt-image-latest"],
+            ["openai/gpt-image-1", "gpt-image-1"],
+            ["openai/gpt-image-1-mini", "gpt-image-1-mini"],
+            ["openai/gpt-image-1.5", "gpt-image-1.5"],
+            ["openai/gpt-image-2", "gpt-image-2"],
+          ] satisfies ReadonlyArray<readonly [string, string]>) {
+            const { envelope } = yield* client.rpc("tools/call", {
+              name: "generate_image",
+              arguments: { subject: "fox", model },
+            });
+
+            expect(envelope.error).toBeUndefined();
+
+            const result = yield* Schema.decodeUnknownEffect(
+              McpSchema.CallToolResult,
+            )(envelope.result);
+
+            expect(result.isError).not.toBe(true);
+            expect(result.content).toContainEqual({
+              type: "image",
+              data: new Uint8Array([1, 2, 3]),
+              mimeType: "image/webp",
+            });
+            const provider = harness.providerRequests.at(-1);
+
+            if (!provider) {
+              throw new Error("OMP did not reach the provider fetch hook");
+            }
+
+            expect(provider.url).toBe("https://api.openai.com/v1/responses");
+            expect(yield* Effect.promise(() => provider.json())).toMatchObject({
+              model: "gpt-5.4",
+              tools: [{ type: "image_generation", model: providerModel }],
+            });
+          }
+
+          expect(harness.providerRequests).toHaveLength(5);
+        }),
     );
     it.effect(
       `${revision}: generates an image using OMP prompt and profile selection`,
@@ -263,6 +424,22 @@ describe("authenticated MCP endpoint", () => {
           Effect.gen(function* () {
             const harness = yield* makeHarnessWithConfig({}, ["deepinfra"]);
             const client = yield* harness.connect(revision);
+            const { envelope: discovery } = yield* client.rpc("tools/list");
+
+            const listed = yield* Schema.decodeUnknownEffect(ListedTools)(
+              discovery.result,
+            );
+
+            expect(discovery.error).toBeUndefined();
+            expect(listed.tools[0]?.inputSchema).toMatchObject({
+              properties: {
+                model: {
+                  enum: expect.arrayContaining([
+                    "deepinfra/black-forest-labs/FLUX-2-pro",
+                  ]),
+                },
+              },
+            });
             const gate = harness.pauseProvider();
 
             const args = {
@@ -751,10 +928,6 @@ describe("authenticated MCP endpoint", () => {
           const client = yield* harness.connect(revision);
 
           for (const [arguments_, problem] of [
-            [
-              { subject: "fox", model: "nonexistent/private-model" },
-              "Image model selector did not match an available image model: nonexistent/private-model",
-            ],
             [
               { subject: "fox", input: [{}] },
               "input entries must include either path or data.",
