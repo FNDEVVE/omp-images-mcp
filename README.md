@@ -81,33 +81,48 @@ host's real profile and temporary files.
 ## Temporary OMP background patches
 
 Bun patches for `@oh-my-pi/pi-catalog@18.8.9`, `@oh-my-pi/pi-ai@18.8.9`, and
-`@oh-my-pi/pi-coding-agent@18.8.9` temporarily carry the background preference
-from [can1357/oh-my-pi#13047](https://github.com/can1357/oh-my-pi/issues/13047).
-The matching upstream change is [PR #15288](https://github.com/can1357/oh-my-pi/pull/15288).
+`@oh-my-pi/pi-coding-agent@18.8.9` backport the background preference from
+[can1357/oh-my-pi#13047](https://github.com/can1357/oh-my-pi/issues/13047) and
+the final behavior in [can1357/oh-my-pi#15288](https://github.com/can1357/oh-my-pi/pull/15288):
+
+- `pi-catalog` supplies reviewed `imageBackground` capability metadata, rebuilt
+  from catalog policy and the deployment's `officialEndpoint` compatibility.
+- `pi-ai` carries the preference through image requests and transports, omits
+  unsupported `auto` fields, and rejects unsupported explicit preferences at
+  the auth gateway before provider credential resolution.
+- `pi-coding-agent` exposes the original tool parameter and preserves explicit
+  preferences through candidate selection and fallback, checking both the
+  image model and its actual hosted carrier.
+
 The original OMP image tool exposes `background: "transparent" | "opaque" |
 "auto"`; the MCP schema derives from OMP's `imageGenSchema`, without a separate
 service implementation. Omitting `background` preserves provider defaults. A
 non-`auto` preference requires catalog-built `imageBackground` capability
-metadata: only the verified `openai-codex/gpt-image-2` hosted route is enabled.
-OpenAI platform `openai/gpt-image-2` and DeepInfra image models are not enabled;
-sharing an API transport does not establish background support. Unsupported
-candidates are skipped rather than silently dropping the preference; an explicit
-unsupported-only selection fails before a provider request. `auto` does not
-require this capability, but is forwarded only to a capable model; for an
-unsupported model it preserves provider defaults by omitting the background
-field entirely, including on strict hosts such as DeepInfra. This requests a
-provider background preference, not client-side alpha conversion.
+metadata: only the verified `openai-codex/gpt-image-2` official hosted route is
+enabled. A hosted carrier must use the same API and an official endpoint;
+custom provider or carrier base URLs do not inherit support from the model
+name. OpenAI platform `openai/gpt-image-2` and DeepInfra image models are not
+enabled; sharing an API transport does not establish background support.
+Unsupported candidates are skipped rather than silently dropping the
+preference; an unsupported-only selection fails before a provider request.
+`auto` does not require this capability, but is forwarded only to a capable
+deployment; otherwise the background field is omitted entirely, including on
+strict hosts such as DeepInfra. This requests a provider background preference,
+not client-side alpha conversion.
 
-The HTTP seam tests use the real OMP tool, controlled Codex SSE responses, and a
-strict DeepInfra response stub to cover background forwarding, unsupported
-selections, fallback without losing the preference, and omitted/`auto` defaults
-without unsupported request fields. They do not perform real provider image
-generation.
+The HTTP seam tests use the real OMP tool, controlled Codex SSE responses, and
+strict provider stubs to cover official and custom provider/carrier endpoints,
+background forwarding, unsupported selections, fallback without losing the
+preference, and omitted/`auto` defaults without unsupported request fields.
+They do not perform real provider image generation.
 
-Keep the checked-in patches with the frozen Bun install until an OMP release
-includes this change. Upgrade the pinned OMP packages and host CLI together,
-then remove these temporary patches and their Bun patch registrations once
-the released packages provide the behavior.
+Keep all three checked-in patches with the frozen Bun install until an OMP
+release includes the final behavior in
+[can1357/oh-my-pi#15288](https://github.com/can1357/oh-my-pi/pull/15288). Upgrade
+the pinned OMP packages and host CLI together, then remove all three temporary
+patch files and their Bun patch registrations, regenerate `bun.lock`, and
+verify the released behavior with a fresh frozen install and the seam tests.
+Merging the upstream PR alone is not enough to remove patches from these pins.
 
 ## Request logs
 
