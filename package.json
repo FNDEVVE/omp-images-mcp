@@ -1,0 +1,47 @@
+{
+  "name": "omp-images-mcp",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "bun": "1.4.2"
+  },
+  "scripts": {
+    "start": "bun src/main.ts",
+    "prepare": "effect-tsgo patch --typescript --no-oxlint",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint .",
+    "format": "oxfmt --check .",
+    "lint:fix": "oxlint --fix .",
+    "format:fix": "oxfmt --write .",
+    "test": "bun run --bun vitest run",
+    "check": "bun run format && bun run lint && bun run typecheck && bun run test"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "4.0.2",
+    "@oh-my-pi/pi-ai": "18.8.9",
+    "@oh-my-pi/pi-catalog": "18.8.9",
+    "@oh-my-pi/pi-coding-agent": "18.8.9",
+    "@oh-my-pi/pi-utils": "18.8.9",
+    "effect": "4.0.2"
+  },
+  "devDependencies": {
+    "@effect/tsgo": "0.51.1",
+    "@effect/vitest": "4.0.2",
+    "@oxlint/plugins": "1.87.0",
+    "@types/bun": "1.4.2",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
+  },
+  "overrides": {
+    "@effect/platform-node-shared": "4.0.2"
+  },
+  "patchedDependencies": {
+    "@oh-my-pi/pi-ai@18.8.9": "patches/@oh-my-pi%2Fpi-ai@18.8.9.patch",
+    "@oh-my-pi/pi-coding-agent@18.8.9": "patches/@oh-my-pi%2Fpi-coding-agent@18.8.9.patch",
+    "@oh-my-pi/pi-catalog@18.8.9": "patches/@oh-my-pi%2Fpi-catalog@18.8.9.patch"
+  }
+}

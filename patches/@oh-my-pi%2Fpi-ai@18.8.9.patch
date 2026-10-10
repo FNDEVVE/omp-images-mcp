@@ -1,0 +1,194 @@
+diff --git a/node_modules/@oh-my-pi/pi-ai/.bun-tag-26fdc1420c4a0786 b/.bun-tag-26fdc1420c4a0786
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@oh-my-pi/pi-ai/.bun-tag-af005bef612abdeb b/.bun-tag-af005bef612abdeb
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/types/images/index.d.ts b/dist/types/images/index.d.ts
+index 589afb9ec2b590034e1387ce9bfd6b1f22e6ca81..d7f1b7115386f852145bff55888eca56221daa66 100644
+--- a/dist/types/images/index.d.ts
++++ b/dist/types/images/index.d.ts
+@@ -9,5 +9,7 @@ export * from "./types.js";
+ export type { ImageGenerationApi } from "@oh-my-pi/pi-catalog/types";
+ /** Whether a catalog API generates images through one of the pi-ai image clients. */
+ export declare function isImageGenerationApi(api: Api): api is ImageGenerationApi;
++/** Whether catalog metadata marks this model as accepting an explicit image background preference. */
++export declare function supportsImageBackground(model: Model<Api>): boolean;
+ /** Generate (or edit, when `request.inputImages` is set) images through the transport selected by the model's `api`. */
+ export declare function generateImage(model: Model<Api>, request: ImageGenerationRequest, options: ImageGenerationOptions): Promise<ImageGenerationResult>;
+diff --git a/dist/types/images/types.d.ts b/dist/types/images/types.d.ts
+index b8b9ca8d784c00aad685f3b64e8165659c264290..bbd3e4e64539fc4b46394425efbf9516617424da 100644
+--- a/dist/types/images/types.d.ts
++++ b/dist/types/images/types.d.ts
+@@ -6,6 +6,8 @@ export interface ImageInput {
+ }
+ export interface ImageGenerationRequest {
+     prompt: string;
++    /** Preferred background; non-auto preferences require a supporting model. */
++    background?: "transparent" | "opaque" | "auto";
+     inputImages?: ImageInput[];
+     aspectRatio?: string;
+     imageSize?: string;
+diff --git a/src/auth-gateway/routes/images.ts b/src/auth-gateway/routes/images.ts
+index 2b30f8d58539410621c645f64239ff5c090d17b4..90adf90b3a97927b084343666917285ab08a8089 100644
+--- a/src/auth-gateway/routes/images.ts
++++ b/src/auth-gateway/routes/images.ts
+@@ -1,7 +1,8 @@
+ import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+ import { logger } from "@oh-my-pi/pi-utils";
++import * as AIError from "../../error";
+ import { classifyGatewayError } from "../../error/gateway";
+-import { generateImage } from "../../images";
++import { generateImage, supportsImageBackground } from "../../images";
+ import * as imagesServer from "../../providers/images-server";
+ import { deterministicUuid } from "../../utils/deterministic-id";
+ import {
+@@ -73,6 +74,14 @@ async function handleImages(
+ 		);
+ 	}
+ 
++	if (parsed.request.background && parsed.request.background !== "auto" && !supportsImageBackground(model)) {
++		return imagesServer.formatError(
++			400,
++			"invalid_request_error",
++			`Image model ${model.provider}/${model.id} does not support ${parsed.request.background} backgrounds`,
++		);
++	}
++
+ 	const client = resolveClientIdentity(req.headers);
+ 	const sessionId = deterministicUuid(`images\u0000${model.provider}/${model.id}`);
+ 	const apiKey = await resolveGatewayApiKey(bootOpts.storage, model, sessionId, controller.signal, peer);
+@@ -112,6 +121,9 @@ async function handleImages(
+ 		);
+ 	} catch (error) {
+ 		if (controller.signal.aborted) return aborted();
++		if (error instanceof AIError.ValidationError) {
++			return imagesServer.formatError(400, "invalid_request_error", error.message);
++		}
+ 		const classified = classifyGatewayError(error);
+ 		logger.warn("auth-gateway image generation failed", { format: "images", error: classified.message, peer });
+ 		return imagesServer.formatError(classified.status, classified.type, classified.message);
+diff --git a/src/images/index.ts b/src/images/index.ts
+index cfdac202fd1a3b9aaf9be6a642d18c3a11af7dba..3a01a06d6e467246a417665c7f63c1aee57f32bb 100644
+--- a/src/images/index.ts
++++ b/src/images/index.ts
+@@ -21,12 +21,25 @@ export function isImageGenerationApi(api: Api): api is ImageGenerationApi {
+ 	return (IMAGE_GENERATION_APIS as readonly Api[]).includes(api);
+ }
+ 
++/** Whether catalog policy verified explicit image backgrounds for this deployment. */
++export function supportsImageBackground(model: Model<Api>): boolean {
++	return model.imageBackground === true;
++}
++
+ /** Generate (or edit, when `request.inputImages` is set) images through the transport selected by the model's `api`. */
+ export async function generateImage(
+ 	model: Model<Api>,
+ 	request: ImageGenerationRequest,
+ 	options: ImageGenerationOptions,
+ ): Promise<ImageGenerationResult> {
++	if (request.background && !supportsImageBackground(model)) {
++		if (request.background !== "auto") {
++			throw new AIError.ValidationError(
++				`Image model ${model.provider}/${model.id} does not support ${request.background} backgrounds`,
++			);
++		}
++		request = { ...request, background: undefined };
++	}
+ 	switch (model.api) {
+ 		case "openai-images":
+ 			return generateOpenAIImage(model, request, options);
+diff --git a/src/images/openai-hosted.ts b/src/images/openai-hosted.ts
+index 020b0a3e00cf3d42c8b8894320e1825c479c43f2..95fe79a081ddaa11e20c92c26a359cce9dc095ad 100644
+--- a/src/images/openai-hosted.ts
++++ b/src/images/openai-hosted.ts
+@@ -162,6 +162,7 @@ export async function generateHostedImage(
+ 		action: content.length > 1 ? "edit" : "generate",
+ 		output_format: "webp",
+ 		...(size ? { size } : {}),
++		...(request.background ? { background: request.background } : {}),
+ 		// A chat model generating on its own lets the host pick the image model.
+ 		...(model.api === "openai-responses" && modelKind(model) === "image"
+ 			? { model: model.requestModelId ?? model.id }
+diff --git a/src/images/openai-images.ts b/src/images/openai-images.ts
+index df6a65d4ce2794489a812582505e61f5e901f106..4b51daaf73fb5637200161380fce5a1114243a82 100644
+--- a/src/images/openai-images.ts
++++ b/src/images/openai-images.ts
+@@ -41,6 +41,7 @@ export async function generateOpenAIImage(
+ 				n: count,
+ 				response_format: "b64_json",
+ 				...(size ? { size } : {}),
++				...(request.background ? { background: request.background } : {}),
+ 			};
+ 	const inputImages = request.inputImages ?? [];
+ 	if (isXAI && inputImages.length > XAI_MAX_EDIT_IMAGES) {
+@@ -84,6 +85,7 @@ export async function generateOpenAIImage(
+ 				form.set("n", String(count));
+ 				form.set("response_format", "b64_json");
+ 				if (size) form.set("size", size);
++				if (request.background) form.set("background", request.background);
+ 				for (const image of inputImages) {
+ 					form.append("image", new File([Buffer.from(image.data, "base64")], "image", { type: image.mimeType }));
+ 				}
+diff --git a/src/images/types.ts b/src/images/types.ts
+index b0fe348756338e381d573c343869b35fb05a9625..c5bcf35638a3e91fe27012c8531eeab1abc0b26b 100644
+--- a/src/images/types.ts
++++ b/src/images/types.ts
+@@ -8,6 +8,8 @@ export interface ImageInput {
+ 
+ export interface ImageGenerationRequest {
+ 	prompt: string;
++	/** Preferred background; non-auto preferences require a supporting model. */
++	background?: "transparent" | "opaque" | "auto";
+ 	inputImages?: ImageInput[];
+ 	aspectRatio?: string;
+ 	imageSize?: string;
+diff --git a/src/providers/images-server.ts b/src/providers/images-server.ts
+index 9b036b607faa629b64c740b8673815a2dbf5fac9..75ece0975962c3e402157ff9598ee4b9a5a68630 100644
+--- a/src/providers/images-server.ts
++++ b/src/providers/images-server.ts
+@@ -6,6 +6,7 @@ const imageJsonRequestSchema = type({
+ 	model: "string > 0",
+ 	prompt: "string > 0",
+ 	"n?": "unknown",
++	"background?": "'transparent' | 'opaque' | 'auto'",
+ 	"size?": "unknown",
+ 	"image_size?": "unknown",
+ 	"aspect_ratio?": "unknown",
+@@ -45,6 +46,14 @@ function optionalCount(value: unknown): number | undefined {
+ 	return value;
+ }
+ 
++function optionalBackground(value: unknown): ImageGenerationRequest["background"] {
++	if (value === undefined || value === null) return undefined;
++	if (value !== "transparent" && value !== "opaque" && value !== "auto") {
++		validation("background must be transparent, opaque, or auto");
++	}
++	return value;
++}
++
+ function decodeInputReference(value: unknown): { data: string; mimeType: string } {
+ 	let raw: unknown = value;
+ 	if (value !== null && typeof value === "object") {
+@@ -81,6 +90,7 @@ function parseJson(body: unknown, kind: ImageRequestKind): ImagesParsedRequest {
+ 		modelId: parsed.model,
+ 		request: {
+ 			prompt: parsed.prompt,
++			...(parsed.background ? { background: parsed.background } : {}),
+ 			...(values.length > 0 ? { inputImages: values.map(decodeInputReference) } : {}),
+ 			...(aspectRatio ? { aspectRatio } : {}),
+ 			...(imageSize ? { imageSize } : {}),
+@@ -116,11 +126,13 @@ async function parseMultipart(form: FormData): Promise<ImagesParsedRequest> {
+ 	}
+ 	const size = form.get("size");
+ 	if (size !== null && typeof size !== "string") validation("size must be a string");
++	const background = optionalBackground(form.get("background"));
+ 	return {
+ 		modelId: model,
+ 		request: {
+ 			prompt,
+ 			inputImages,
++			...(background ? { background } : {}),
+ 			...(size ? { imageSize: size } : {}),
+ 			...(count ? { count } : {}),
+ 		},

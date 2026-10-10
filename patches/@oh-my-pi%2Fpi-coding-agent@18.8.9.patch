@@ -1,0 +1,81 @@
+diff --git a/node_modules/@oh-my-pi/pi-coding-agent/.bun-tag-69b7c659e6c51e1b b/.bun-tag-69b7c659e6c51e1b
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/types/tools/image-gen.d.ts b/dist/types/tools/image-gen.d.ts
+index ab528319e96388e810f74f3d81f0ef08c36363dd..516e71317970ae8dd3ba78fbb417e98fa5755950 100644
+--- a/dist/types/tools/image-gen.d.ts
++++ b/dist/types/tools/image-gen.d.ts
+@@ -4,6 +4,7 @@ import type { CustomTool } from "../extensibility/custom-tools/types.js";
+ export declare const imageGenSchema: import("@oh-my-pi/omptype").FluentType<{
+     action?: string | undefined;
+     aspect_ratio?: "16:9" | "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "9:16" | undefined;
++    background?: "transparent" | "opaque" | "auto" | undefined;
+     changes?: string[] | undefined;
+     composition?: string | undefined;
+     image_size?: "1024x1024" | "1024x1536" | "1536x1024" | undefined;
+@@ -21,6 +22,7 @@ export declare const imageGenSchema: import("@oh-my-pi/omptype").FluentType<{
+ }, {
+     action?: string | undefined;
+     aspect_ratio?: "16:9" | "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "9:16" | undefined;
++    background?: "transparent" | "opaque" | "auto" | undefined;
+     changes?: string[] | undefined;
+     composition?: string | undefined;
+     image_size?: "1024x1024" | "1024x1536" | "1536x1024" | undefined;
+diff --git a/src/tools/image-gen.ts b/src/tools/image-gen.ts
+index d23479ab442106d6ff1fcdd0e2fe8f750ff716d2..2238ac024b9f1efc36613299bd3d9ab66c84dd5f 100644
+--- a/src/tools/image-gen.ts
++++ b/src/tools/image-gen.ts
+@@ -11,6 +11,7 @@ import {
+ 	isImageGenerationApi,
+ 	type Model,
+ 	parseAntigravityCredentials,
++	supportsImageBackground,
+ } from "@oh-my-pi/pi-ai";
+ import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+ import { isEnoent, logger, parseImageMetadata, prompt, ptree, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+@@ -45,6 +46,9 @@ export const imageGenSchema = type({
+ 	"changes?": type("string[]").describe("edits to make"),
+ 	"aspect_ratio?": aspectRatioSchema,
+ 	"image_size?": imageSizeSchema,
++	"background?": type('"transparent" | "opaque" | "auto"').describe(
++		"background preference; transparent and opaque require a supporting image model",
++	),
+ 	"input?": inputImageSchema.array().describe("input images"),
+ 	"model?": type("string").describe("image model selector for this request"),
+ });
+@@ -252,8 +256,15 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
+ 
+ 			const failures: ProviderHttpError[] = [];
+ 			const skipped: string[] = [];
++			const requiresBackground = params.background !== undefined && params.background !== "auto";
++			let hasBackgroundCandidate = false;
+ 			let inputImages: ImageGenerationRequest["inputImages"];
+ 			for (const model of candidates) {
++				if (requiresBackground && !supportsImageBackground(model)) {
++					skipped.push(`${model.provider}/${model.id} (unsupported background ${params.background})`);
++					continue;
++				}
++				hasBackgroundCandidate = true;
+ 				if (!isImageGenerationApi(model.api)) {
+ 					logger.warn("Skipping unsupported image model API", {
+ 						provider: model.provider,
+@@ -301,6 +312,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
+ 					inputImages,
+ 					aspectRatio: params.aspect_ratio,
+ 					imageSize: params.image_size,
++					background: params.background,
+ 					count: 1,
+ 				};
+ 				const resolvedModel = {
+@@ -332,6 +344,11 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
+ 
+ 			const attempted = candidates.map(model => `${model.provider}/${model.id}`).join(", ");
+ 			const suffix = skipped.length > 0 ? ` Skipped: ${skipped.join(", ")}.` : "";
++			if (requiresBackground && !hasBackgroundCandidate) {
++				throw new Error(
++					`No image model in the resolved image chain supports background "${params.background}".${suffix}`,
++				);
++			}
+ 			throw new AggregateError(
+ 				failures,
+ 				`Image generation exhausted the resolved image chain${attempted ? `: ${attempted}` : "."}${suffix}`,

@@ -1,0 +1,43 @@
+import { defineConfig } from "oxfmt";
+
+export default defineConfig({
+  semi: true,
+  singleQuote: false,
+  arrowParens: "avoid",
+  trailingComma: "all",
+  printWidth: 80,
+  sortPackageJson: false,
+  sortImports: {
+    ignoreCase: false,
+    order: "asc",
+    newlinesBetween: true,
+    internalPattern: [],
+    customGroups: [{ groupName: "scoped", elementNamePattern: ["@*/**"] }],
+    groups: [
+      "builtin",
+      "scoped",
+      "external",
+      ["parent", "sibling", "index"],
+      "unknown",
+    ],
+  },
+  ignorePatterns: [
+    "node_modules/**",
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".windsurf/**",
+    "tools/oxlint/anti-slop/**",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/agents/**",
+    "skills-lock.json",
+  ],
+});

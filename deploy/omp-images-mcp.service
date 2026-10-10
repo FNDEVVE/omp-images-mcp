@@ -1,0 +1,19 @@
+[Unit]
+Description=OMP image requests MCP service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/GIT/omp-images-mcp
+ExecStart=%h/.bun/bin/bun src/main.ts
+Environment=OMP_IMAGES_MCP_BEARER_TOKEN_FILE=%h/.config/omp-images-mcp/token
+Environment=OMP_IMAGES_MCP_PORT=4447
+Environment=OMP_IMAGES_MCP_MAX_CONCURRENT_EXECUTIONS=8
+Environment=OMP_IMAGES_MCP_MAX_REQUEST_BODY_BYTES=52428800
+Environment="OMP_IMAGES_MCP_RETENTION=24 hours"
+UMask=0077
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=default.target
