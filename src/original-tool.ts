@@ -2,9 +2,10 @@ import { join } from "node:path";
 // @effect-diagnostics unstableApiUsage:off
 import { fileURLToPath } from "node:url";
 
-import type { FetchImpl } from "@oh-my-pi/pi-ai";
+import { type FetchImpl, isImageGenerationApi } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resolveModelFromSettings } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { roleCandidatePool } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -43,7 +44,7 @@ const jsonObject = Schema.decodeUnknownSync(
   Schema.Record(Schema.String, Schema.Json),
 );
 
-const remoteInputSchema = () => {
+const remoteInputSchema = (models: ReadonlyArray<string>) => {
   const original = jsonObject(
     imageGenSchema.toJsonSchema({
       io: "input",
@@ -62,6 +63,10 @@ const remoteInputSchema = () => {
     ...original,
     properties: {
       ...properties,
+      model:
+        models.length === 0
+          ? properties.model
+          : { ...jsonObject(properties.model), enum: models },
       input: {
         ...input,
         items: {
@@ -79,12 +84,6 @@ const remoteInputSchema = () => {
     },
   };
 };
-
-const tool = Schema.decodeUnknownSync(McpSchema.Tool)({
-  name: imageGenTool.name,
-  description: imageGenTool.description,
-  inputSchema: remoteInputSchema(),
-});
 
 const originalToolSource = fileURLToPath(
   import.meta.resolve("@oh-my-pi/pi-coding-agent/tools/image-gen"),
@@ -195,6 +194,20 @@ export const registerTool = (config: StartupConfig, fetch?: FetchImpl) =>
         availableModels: modelRegistry.getAvailable(),
       });
 
+      const models = [
+        ...new Set(
+          roleCandidatePool("image", settings, modelRegistry)
+            .filter(candidate => isImageGenerationApi(candidate.api))
+            .map(candidate => `${candidate.provider}/${candidate.id}`),
+        ),
+      ];
+
+      const tool = Schema.decodeUnknownSync(McpSchema.Tool)({
+        name: imageGenTool.name,
+        description: imageGenTool.description,
+        inputSchema: remoteInputSchema(models),
+      });
+
       const sessionManager = SessionManager.inMemory(config.workingDirectory);
       const store = yield* RetentionStore;
       const server = yield* McpServer.McpServer;
@@ -217,6 +230,16 @@ export const registerTool = (config: StartupConfig, fetch?: FetchImpl) =>
                       : String(error),
                   }),
               });
+
+              if (
+                params.model !== undefined &&
+                models.length > 0 &&
+                !models.includes(params.model)
+              ) {
+                return yield* new InvalidToolInput({
+                  message: "model must be one of: " + models.join(", "),
+                });
+              }
 
               const input =
                 params.input === undefined

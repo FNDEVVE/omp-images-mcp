@@ -1,4 +1,7 @@
 // @effect-diagnostics unstableApiUsage:off
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { describe, expect, it } from "@effect/vitest";
 
 import { Effect, Fiber, Schema } from "effect";
@@ -208,6 +211,13 @@ describe("image request logging", () => {
       () =>
         Effect.gen(function* () {
           const harness = yield* makeHarness;
+          yield* Effect.promise(() =>
+            writeFile(
+              join(harness.directory, "models.yml"),
+              "providers:\n  openai:\n    baseUrl: https://api.openai.com/v1\n    apiKey: fake-provider-key\n    models:\n      - id: test-bearer-token\n        api: openai-images\n",
+            ),
+          );
+          yield* harness.restart;
           const client = yield* harness.connect(revision);
           harness.logs.length = 0;
           yield* client.rpc("tools/call", {
@@ -215,7 +225,7 @@ describe("image request logging", () => {
             arguments: {
               subject: { data: inputImage, secret: "test-bearer-token" },
               text: "safe prompt text",
-              model: "test-bearer-token",
+              model: "openai/test-bearer-token",
               input: [{ data: inputImage }],
             },
           });
@@ -225,7 +235,7 @@ describe("image request logging", () => {
               authentication: "authenticated",
               tool: "generate_image",
               selected_model: null,
-              requested_model: "[redacted]",
+              requested_model: "openai/[redacted]",
               outcome: "failure",
               prompt: { text: "safe prompt text" },
             },
