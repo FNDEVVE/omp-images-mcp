@@ -1,6 +1,9 @@
 diff --git a/node_modules/@oh-my-pi/pi-coding-agent/.bun-tag-69b7c659e6c51e1b b/.bun-tag-69b7c659e6c51e1b
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@oh-my-pi/pi-coding-agent/.bun-tag-6b418e0b4c56e521 b/.bun-tag-6b418e0b4c56e521
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/types/tools/image-gen.d.ts b/dist/types/tools/image-gen.d.ts
 index ab528319e96388e810f74f3d81f0ef08c36363dd..516e71317970ae8dd3ba78fbb417e98fa5755950 100644
 --- a/dist/types/tools/image-gen.d.ts
@@ -22,7 +25,7 @@ index ab528319e96388e810f74f3d81f0ef08c36363dd..516e71317970ae8dd3ba78fbb417e98f
      composition?: string | undefined;
      image_size?: "1024x1024" | "1024x1536" | "1536x1024" | undefined;
 diff --git a/src/tools/image-gen.ts b/src/tools/image-gen.ts
-index d23479ab442106d6ff1fcdd0e2fe8f750ff716d2..2238ac024b9f1efc36613299bd3d9ab66c84dd5f 100644
+index d23479ab442106d6ff1fcdd0e2fe8f750ff716d2..5f71121adc33104cda45935d1417d55963311948 100644
 --- a/src/tools/image-gen.ts
 +++ b/src/tools/image-gen.ts
 @@ -11,6 +11,7 @@ import {
@@ -43,7 +46,7 @@ index d23479ab442106d6ff1fcdd0e2fe8f750ff716d2..2238ac024b9f1efc36613299bd3d9ab6
  	"input?": inputImageSchema.array().describe("input images"),
  	"model?": type("string").describe("image model selector for this request"),
  });
-@@ -252,8 +256,15 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
+@@ -252,8 +256,29 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
  
  			const failures: ProviderHttpError[] = [];
  			const skipped: string[] = [];
@@ -51,7 +54,21 @@ index d23479ab442106d6ff1fcdd0e2fe8f750ff716d2..2238ac024b9f1efc36613299bd3d9ab6
 +			let hasBackgroundCandidate = false;
  			let inputImages: ImageGenerationRequest["inputImages"];
  			for (const model of candidates) {
-+				if (requiresBackground && !supportsImageBackground(model)) {
++				const carrier =
++					model.api === "openai-responses" || model.api === "openai-codex-responses"
++						? model.hostedImage
++							? model
++							: resolveHostedImageCarrier(ctx.modelRegistry, model, ctx.model)
++						: undefined;
++				const supportsBackground =
++					!requiresBackground ||
++					(supportsImageBackground(model) &&
++						(!carrier ||
++							(carrier.api === model.api &&
++								carrier.compat &&
++								"officialEndpoint" in carrier.compat &&
++								carrier.compat.officialEndpoint)));
++				if (requiresBackground && !supportsBackground) {
 +					skipped.push(`${model.provider}/${model.id} (unsupported background ${params.background})`);
 +					continue;
 +				}
@@ -59,7 +76,18 @@ index d23479ab442106d6ff1fcdd0e2fe8f750ff716d2..2238ac024b9f1efc36613299bd3d9ab6
  				if (!isImageGenerationApi(model.api)) {
  					logger.warn("Skipping unsupported image model API", {
  						provider: model.provider,
-@@ -301,6 +312,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
+@@ -274,10 +299,8 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
+ 					continue;
+ 				}
+ 
+-				let carrier: Model | undefined;
+ 				let apiKey = ctx.modelRegistry.resolver(model, sessionId);
+ 				if (model.api === "openai-responses" || model.api === "openai-codex-responses") {
+-					carrier = model.hostedImage ? model : resolveHostedImageCarrier(ctx.modelRegistry, model, ctx.model);
+ 					if (!carrier) {
+ 						skipped.push(`${model.provider}/${model.id} (hosted chat carrier unavailable)`);
+ 						continue;
+@@ -301,6 +324,7 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
  					inputImages,
  					aspectRatio: params.aspect_ratio,
  					imageSize: params.image_size,
@@ -67,7 +95,7 @@ index d23479ab442106d6ff1fcdd0e2fe8f750ff716d2..2238ac024b9f1efc36613299bd3d9ab6
  					count: 1,
  				};
  				const resolvedModel = {
-@@ -332,6 +344,11 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
+@@ -332,6 +356,11 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
  
  			const attempted = candidates.map(model => `${model.provider}/${model.id}`).join(", ");
  			const suffix = skipped.length > 0 ? ` Skipped: ${skipped.join(", ")}.` : "";

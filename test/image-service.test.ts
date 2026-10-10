@@ -19,7 +19,10 @@ import {
 
 const ListedTools = Schema.Struct({ tools: Schema.Array(McpSchema.Tool) });
 
-const makeBackgroundHarness = (imageRole = "openai-codex/gpt-image-2") =>
+const makeBackgroundHarness = (
+  imageRole = "openai-codex/gpt-image-2",
+  modelsConfig = "providers:\n  openai-codex:\n    baseUrl: https://chatgpt.com/backend-api\n",
+) =>
   Effect.gen(function* () {
     const harness = yield* makeHarnessWithConfig({}, [
       "openai-codex",
@@ -33,6 +36,9 @@ const makeBackgroundHarness = (imageRole = "openai-codex/gpt-image-2") =>
         join(harness.directory, "config.yml"),
         `modelRoles:\n  default: openai-codex/gpt-6.1-sol\n  image: ${imageRole}\n`,
       ),
+    );
+    yield* Effect.promise(() =>
+      writeFile(join(harness.directory, "models.yml"), modelsConfig),
     );
     harness.setProviderResponse(
       new Response(
@@ -372,6 +378,147 @@ describe("authenticated MCP endpoint", () => {
             });
             expect(body).not.toHaveProperty("tools.0.model");
           }),
+      );
+    }
+
+    for (const { label, modelsConfig } of [
+      {
+        label: "custom Codex provider endpoint",
+        modelsConfig:
+          "providers:\n  openai-codex:\n    baseUrl: https://codex.example/backend-api\n",
+      },
+      {
+        label: "custom Codex hosted carrier endpoint",
+        modelsConfig:
+          "providers:\n  openai-codex:\n    baseUrl: https://chatgpt.com/backend-api\n    apiKey: fake-provider-key\n    models:\n      - id: gpt-6.1-sol\n        api: openai-codex-responses\n        baseUrl: https://codex.example/backend-api\n",
+      },
+    ]) {
+      it.effect(
+        `${revision}: rejects transparent at a ${label} before provider requests`,
+        () =>
+          Effect.gen(function* () {
+            const harness = yield* makeBackgroundHarness(
+              "openai-codex/gpt-image-2",
+              modelsConfig,
+            );
+
+            const client = yield* harness.connect(revision);
+
+            const { response, envelope } = yield* client.rpc("tools/call", {
+              name: "generate_image",
+              arguments: {
+                subject: "a fox",
+                model: "openai-codex/gpt-image-2",
+                background: "transparent",
+              },
+            });
+
+            expect(response.status).toBe(200);
+
+            const messages = [
+              'supports background "transparent"',
+              "openai-codex/gpt-image-2",
+            ];
+
+            if (revision === "2025-06-18") {
+              expect(envelope.error?.code).toBe(-32602);
+
+              for (const message of messages) {
+                expect(envelope.error?.message).toContain(message);
+              }
+            } else {
+              expect(envelope.error).toBeUndefined();
+
+              const result = yield* Schema.decodeUnknownEffect(
+                McpSchema.CallToolResult,
+              )(envelope.result);
+
+              expect(result.isError).toBe(true);
+
+              for (const message of messages) {
+                expect(result.content).toContainEqual({
+                  type: "text",
+                  text: expect.stringContaining(message),
+                });
+              }
+            }
+
+            expect(harness.networkCalls()).toBe(0);
+          }),
+      );
+
+      it.live(`${revision}: omits auto for a strict ${label}`, () =>
+        Effect.gen(function* () {
+          const harness = yield* makeBackgroundHarness(
+            "openai-codex/gpt-image-2",
+            modelsConfig,
+          );
+
+          const client = yield* harness.connect(revision);
+          const gate = harness.pauseProvider();
+
+          const fiber = yield* client
+            .rpc("tools/call", {
+              name: "generate_image",
+              arguments: {
+                subject: "a fox",
+                model: "openai-codex/gpt-image-2",
+                background: "auto",
+              },
+            })
+            .pipe(Effect.forkChild);
+
+          yield* gate.started;
+          const provider = harness.providerRequests[0];
+
+          if (!provider) {
+            throw new Error("OMP did not reach the provider fetch hook");
+          }
+
+          const body = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({
+              model: Schema.String,
+              stream: Schema.Boolean,
+              tools: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
+            }),
+          )(yield* Effect.promise(() => provider.json()));
+
+          // The custom host rejects every background field, including auto.
+          if (body.tools.some(tool => Object.hasOwn(tool, "background"))) {
+            harness.setProviderResponse(
+              Response.json(
+                { error: { message: "Unknown field: background" } },
+                { status: 400 },
+              ),
+            );
+          }
+
+          yield* gate.release;
+          const { response, envelope } = yield* Fiber.join(fiber);
+          expect(response.status).toBe(200);
+          expect(envelope.error).toBeUndefined();
+
+          const result = yield* Schema.decodeUnknownEffect(
+            McpSchema.CallToolResult,
+          )(envelope.result);
+
+          expect(result.isError).not.toBe(true);
+          expect(result.content).toContainEqual({
+            type: "image",
+            data: new Uint8Array([1, 2, 3]),
+            mimeType: "image/webp",
+          });
+          expect(harness.providerRequests).toHaveLength(1);
+          expect(provider.url).toBe(
+            "https://codex.example/backend-api/codex/responses",
+          );
+          expect(body).toMatchObject({
+            model: "gpt-6.1-sol",
+            stream: true,
+            tools: [{ type: "image_generation" }],
+          });
+          expect(body).not.toHaveProperty("tools.0.background");
+        }).pipe(Effect.timeout("2 seconds")),
       );
     }
 
