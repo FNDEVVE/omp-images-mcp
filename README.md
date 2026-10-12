@@ -569,9 +569,9 @@ against the actual local assets, not inferred from current upstream HEAD or a
 skill-lock hash.
 
 The fresh install ran the original repository-local installer
-`/home/fnd/GIT/omp-images-mcp/.agents/skills/install-anti-slop/scripts/install.mjs`
+`.agents/skills/install-anti-slop/scripts/install.mjs`
 from the tooling worktree, without force. Its source assets were
-`/home/fnd/GIT/omp-images-mcp/.agents/skills/install-anti-slop/assets/anti-slop/`;
+`.agents/skills/install-anti-slop/assets/anti-slop/`;
 the installed destination is `tools/oxlint/anti-slop/`. All 38 copied asset files
 matched that verified source byte-for-byte. A second installer invocation refused
 the existing destination. Preserve local choices and follow the skill's update
